@@ -279,3 +279,145 @@ visualize_rectification(
     left_imgs, right_imgs,
     map1_left, map2_left,
     map1_right, map2_right)
+
+# エピポーラ誤差の計算
+def compute_epipolar_error(imgpoints_left, imgpoints_right, F):
+    
+    total_error = 0
+    total_points = 0
+    
+    for i in range(len(imgpoints_left)):
+        pts_left  = imgpoints_left[i].reshape(-1, 1, 2)
+        pts_right = imgpoints_right[i].reshape(-1, 1, 2)
+        
+        # Compute epilines for left points in right image
+        lines_right = cv.computeCorrespondEpilines(pts_left, 1, F).reshape(-1, 3)
+        
+        # Distance from right points to their epilines
+        for j, (pt, line) in enumerate(zip(pts_right.reshape(-1, 2), lines_right)):
+            a, b, c = line
+            x, y = pt
+            dist = abs(a*x + b*y + c) / np.sqrt(a**2 + b**2)
+            total_error += dist
+            total_points += 1
+    
+    mean_error = total_error / total_points
+    print(f"\n=== Epipolar Error ===")
+    print(f"Mean epipolar error: {mean_error:.4f} pixels")
+    
+    if mean_error < 0.5:
+        print("Quality: EXCELLENT ")
+    elif mean_error < 1.0:
+        print("Quality: GOOD ")
+    else:
+        print("Quality: NEEDS IMPROVEMENT ")
+    
+    return mean_error
+
+# エピポーラ誤差を計算する
+epipolar_error = compute_epipolar_error(
+    imgpoints_left_clean, imgpoints_right_clean, F)
+
+# 結果を保存する
+def save_calibration(K1, D1, K2, D2, R, T, E, F,
+                     R1, R2, P1, P2, Q,
+                     map1_left, map2_left,
+                     map1_right, map2_right,
+                     rms1, rms2, ret, epipolar_error,
+                     image_size):
+    
+    save_path = os.path.join(CALIB_DIR, "stereo_calibration.npz")
+    
+    np.savez(save_path,
+        # Intrinsics
+        K1=K1, D1=D1,
+        K2=K2, D2=D2,
+        # Stereo
+        R=R, T=T, E=E, F=F,
+        # Rectification
+        R1=R1, R2=R2,
+        P1=P1, P2=P2, Q=Q,
+        # Maps
+        map1_left=map1_left,   map2_left=map2_left,
+        map1_right=map1_right, map2_right=map2_right,
+        # Metrics
+        rms_left=rms1,
+        rms_right=rms2,
+        stereo_rms=ret,
+        epipolar_error=epipolar_error,
+        image_size=image_size
+    )
+    
+    print(f"\n=== Calibration Saved ===")
+    print(f"Saved to: {save_path}")
+    return save_path
+
+# 保存する
+save_calibration(K1, D1, K2, D2, R, T, E, F,
+                 R1, R2, P1, P2, Q,
+                 map1_left, map2_left,
+                 map1_right, map2_right,
+                 rms1, rms2, ret, epipolar_error,
+                 image_size)
+
+# キャリブレーションレポートを生成する
+def generate_report(K1, D1, K2, D2, R, T,
+                    rms1, rms2, ret, epipolar_error,
+                    image_size):
+    
+    fx1, fy1 = K1[0,0], K1[1,1]
+    cx1, cy1 = K1[0,2], K1[1,2]
+    fx2, fy2 = K2[0,0], K2[1,1]
+    cx2, cy2 = K2[0,2], K2[1,2]
+    baseline  = np.linalg.norm(T)
+    
+    rvec, _ = cv.Rodrigues(R)
+    angles  = np.degrees(rvec).flatten()
+    
+    report = f"""
+=== STEREO CAMERA CALIBRATION REPORT ===
+
+Image Size: {image_size[0]}x{image_size[1]} pixels
+
+LEFT CAMERA (D1 - EoSens2.0MCX12)
+  Focal Length:     fx={fx1:.2f}px  fy={fy1:.2f}px
+  Principal Point:  cx={cx1:.2f}px  cy={cy1:.2f}px
+  RMS Error:        {rms1:.4f} pixels
+
+RIGHT CAMERA (D0 - MC2066)
+  Focal Length:     fx={fx2:.2f}px  fy={fy2:.2f}px
+  Principal Point:  cx={cx2:.2f}px  cy={cy2:.2f}px
+  RMS Error:        {rms2:.4f} pixels
+
+STEREO PARAMETERS
+  Baseline:         {baseline:.2f} mm
+  Stereo RMS:       {ret:.4f} pixels
+  Epipolar Error:   {epipolar_error:.4f} pixels
+  Rotation angles:  {angles[0]:.3f} deg  {angles[1]:.3f} deg  {angles[2]:.3f} deg
+
+QUALITY ASSESSMENT
+  Intrinsic L:  {"EXCELLENT" if rms1 < 0.3 else "GOOD" if rms1 < 0.5 else "ACCEPTABLE" if rms1 < 1.0 else "POOR"}
+  Intrinsic R:  {"EXCELLENT" if rms2 < 0.3 else "GOOD" if rms2 < 0.5 else "ACCEPTABLE" if rms2 < 1.0 else "POOR"}
+  Stereo RMS:   {"EXCELLENT" if ret < 0.5 else "GOOD" if ret < 1.0 else "ACCEPTABLE" if ret < 2.0 else "POOR"}
+  Epipolar:     {"EXCELLENT" if epipolar_error < 0.5 else "GOOD" if epipolar_error < 1.0 else "POOR"}
+
+PAPER STATEMENT:
+Stereo camera calibration was performed using Zhang's method
+implemented in OpenCV {cv.__version__}. A {CHECKERBOARD[0]+1}x{CHECKERBOARD[1]+1} checkerboard with
+{SQUARE_SIZE}mm square size was used. The intrinsic reprojection
+error was {rms1:.4f}px (Left) and {rms2:.4f}px (Right).
+Stereo RMS: {ret:.4f}px. Baseline: {baseline:.2f}mm.
+Epipolar error: {epipolar_error:.4f}px.
+"""
+    print(report)
+    
+    report_path = os.path.join(CALIB_DIR, "calibration_report.txt")
+    with open(report_path, 'w', encoding='utf-8') as f:
+        f.write(report)
+    print(f"Report saved to: {report_path}")
+    
+    return report
+
+generate_report(K1, D1, K2, D2, R, T,
+                rms1, rms2, ret, epipolar_error,
+                image_size)
