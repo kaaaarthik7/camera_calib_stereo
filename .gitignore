@@ -1,0 +1,15 @@
+# Calibration image data
+test/
+test_01/
+test_02/
+test_03/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# IDE
+.vscode/
+.idea/
